@@ -1,0 +1,6 @@
+path: dataset # tam path vermek gerekebilir. C:/Users/xx/xx/xx/xx/xx/YOLO11/dataset
+train: images/train
+val: images/val
+
+nc: 1
+names: ['hole']
