@@ -3,19 +3,20 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, models, transforms
 from torch.utils.data import DataLoader
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 import time
 import os
-import csv
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # 📌 Ayarlar
 model_name = "inception_v3"
-epochs = 10
+epochs = 25
 batch_size = 32
 num_classes = 2
 image_size = 299
 
-# 🔁 Veri dönüşümü
+# 🔁 Dönüştürme
 transform = transforms.Compose([
     transforms.Resize((image_size, image_size)),
     transforms.ToTensor(),
@@ -32,8 +33,8 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size)
 test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
-# 📦 InceptionV3 modeli
-model = models.inception_v3(pretrained=True, aux_logits=True)
+# 📦 Model (sıfırdan eğitim)
+model = models.inception_v3(pretrained=False, aux_logits=True)
 model.fc = nn.Linear(model.fc.in_features, num_classes)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -43,11 +44,12 @@ model = model.to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-# ⏱ Eğitim süresi ölçümü
+# ⏱ Eğitim
 start_time = time.time()
+train_losses = []
+val_accuracies = []
 
-# 🏋️ Eğitim döngüsü
-for epoch in range(epochs):
+for epoch in range(1, epochs + 1):
     model.train()
     total_loss = 0
     for images, labels in train_loader:
@@ -56,42 +58,38 @@ for epoch in range(epochs):
         loss1 = criterion(outputs, labels)
         loss2 = criterion(aux_outputs, labels)
         loss = loss1 + 0.4 * loss2
-
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
-    print(f"Epoch {epoch+1} - Loss: {total_loss:.4f}")
+
+    train_losses.append(total_loss)
+
+    # 🔍 Validation
+    model.eval()
+    val_correct = 0
+    val_total = 0
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)
+            val_total += labels.size(0)
+            val_correct += (predicted == labels).sum().item()
+    val_acc = 100 * val_correct / val_total
+    val_accuracies.append(val_acc)
+
+    print(f"Epoch {epoch}/{epochs} - Loss: {total_loss:.4f} - Validation Accuracy: {val_acc:.2f}%")
 
 train_time = time.time() - start_time
-print(f"\n🕒 Training Time: {train_time:.2f} seconds")
 
 # 💾 Model kaydet
 torch.save(model.state_dict(), f"{model_name}.pt")
 model_size = os.path.getsize(f"{model_name}.pt") / (1024 * 1024)
-print(f"💾 Model Size: {model_size:.2f} MB")
-
-# 🧠 Parametre sayısı
 total_params = sum(p.numel() for p in model.parameters())
-print(f"🧠 Total Parameters: {total_params:,}")
 
-# 📊 Validation Accuracy
+# 🧪 Test metrikleri
 model.eval()
-correct = 0
-total = 0
-with torch.no_grad():
-    for images, labels in val_loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images)
-        _, predicted = torch.max(outputs, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
-val_acc = 100 * correct / total
-print(f"\n✅ Validation Accuracy: {val_acc:.2f}%")
-
-# 🧪 Test doğruluk + analiz
-correct = 0
-total = 0
 all_preds = []
 all_labels = []
 with torch.no_grad():
@@ -99,34 +97,58 @@ with torch.no_grad():
         images, labels = images.to(device), labels.to(device)
         outputs = model(images)
         _, predicted = torch.max(outputs, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
         all_preds.extend(predicted.cpu().numpy())
         all_labels.extend(labels.cpu().numpy())
-test_acc = 100 * correct / total
-print(f"\n✅ Test Accuracy: {test_acc:.2f}%")
 
-print("\n📋 Classification Report:")
-print(classification_report(all_labels, all_preds, target_names=train_dataset.classes))
-print("\n📊 Confusion Matrix:")
-print(confusion_matrix(all_labels, all_preds))
+precision = precision_score(all_labels, all_preds, average='binary')
+recall = recall_score(all_labels, all_preds, average='binary')
+f1 = f1_score(all_labels, all_preds, average='binary')
 
 # ⚡ Inference süresi
 sample = next(iter(test_loader))[0][0].unsqueeze(0).to(device)
 start = time.time()
 _ = model(sample)
 inference_time = time.time() - start
-print(f"⚡ Inference Time (1 image): {inference_time:.4f} seconds")
 
-# 📤 CSV kayıt
-with open("model_metrics.csv", mode="a", newline="") as file:
-    writer = csv.writer(file)
-    writer.writerow([
-        model_name,
-        f"{train_time:.2f}",
-        f"{model_size:.2f}",
-        total_params,
-        f"{val_acc:.2f}",
-        f"{test_acc:.2f}",
-        f"{inference_time:.4f}"
-    ])
+# 📊 Confusion Matrix
+cm = confusion_matrix(all_labels, all_preds)
+plt.figure(figsize=(5, 4))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=train_dataset.classes, yticklabels=train_dataset.classes)
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.title(f'Confusion Matrix - {model_name}')
+plt.savefig(f"{model_name}_confusion_matrix.png")
+plt.close()
+
+# 📉 Loss ve Accuracy Eğrileri
+plt.figure()
+plt.plot(range(1, len(train_losses)+1), train_losses, label='Training Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title(f'{model_name} - Training Loss over Epochs')
+plt.grid()
+plt.legend()
+plt.savefig(f"{model_name}_loss_curve.png")
+plt.close()
+
+plt.figure()
+plt.plot(range(1, len(val_accuracies)+1), val_accuracies, label='Validation Accuracy', color='green')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy (%)')
+plt.title(f'{model_name} - Validation Accuracy over Epochs')
+plt.grid()
+plt.legend()
+plt.savefig(f"{model_name}_val_accuracy.png")
+plt.close()
+
+# 📊 Sonuçları yazdır
+print(f"\n📊 Model: {model_name}")
+print(f"🧠 Parametre Sayısı: {total_params:,}")
+print(f"💾 Model Boyutu: {model_size:.2f} MB")
+print(f"🕒 Eğitim Süresi: {train_time:.2f} saniye")
+print(f"⚡ Inference Süresi (1 görüntü): {inference_time:.4f} saniye")
+print(f"🎯 Precision: {precision:.4f}")
+print(f"🎯 Recall: {recall:.4f}")
+print(f"🎯 F1-Score: {f1:.4f}")
+print("\n📊 Confusion Matrix:")
+print(cm)

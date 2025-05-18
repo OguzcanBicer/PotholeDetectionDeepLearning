@@ -1,12 +1,13 @@
 from ultralytics import YOLO
 
 def main():
-    model = YOLO("yolo11n.pt")  # Veya yolov8n.pt
+    model = YOLO("yolo11m.pt")  
     results = model.train(
         data="dataset/data.yaml",
-        epochs=50,
+        epochs=25,
         imgsz=300,
-        batch=16
+        batch=16,
+        pretrained=False
     )
 
 if __name__ == "__main__":
